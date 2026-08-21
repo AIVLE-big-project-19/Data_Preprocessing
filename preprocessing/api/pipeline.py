@@ -1016,11 +1016,6 @@ def extract_raster_features(longitude: Any, latitude: Any) -> dict[str, Any]:
         output[name] = terrain.get(name, np.nan)
     output["terrain_status"] = terrain.get("terrain_status", "MISSING")
 
-    for name in SOLAR_ANNUAL_TOTAL_FEATURES:
-        value = output.get(name)
-        if value is not None and pd.notna(value):
-            output[name] = float(value) / settings.solar_annual_to_daily_divisor
-
     output["raster_status"] = (
         "SUCCESS"
         if any(pd.notna(output.get(name)) for name in RASTER_FEATURES)
