@@ -76,9 +76,6 @@ class Settings(BaseSettings):
     vision_image_zoom: int = Field(default=18, ge=7, le=18)
     vision_image_size: int = Field(default=1024, ge=256, le=2048)
 
-    # 공간 분석 설정
-    solar_annual_to_daily_divisor: float = Field(default=365.25, gt=0)
-
     # 지형 피처 설정
     # 업로드한 노트북과 동일하게 기본 3x3 윈도우를 사용합니다.
     terrain_window_size: int = Field(default=3, ge=1, le=15)
