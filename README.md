@@ -1,8 +1,8 @@
 # Solar Aivle 데이터 전처리·Vision 연동
 
-주소를 입력하면 태양광 후보지 분석에 필요한 환경·지형·전력망·공간정보를 수집하고, Ranking ML에서 사용하는 34개 컬럼의 `Merged_Test_Data.csv`를 생성하는 프로젝트입니다.
+주소를 입력하면 태양광 후보지 분석에 필요한 환경·지형·전력망·공간정보를 수집하고, Ranking ML에서 사용하는 34개 ML Feature와 Vision AI 분석 결과를 생성하는 프로젝트입니다.
 
-전처리 서버가 후보지 주소와 공간정보를 구성한 뒤 Vision AI 서버에 항공영상과 필지 정보를 전달하며, Vision 결과는 별도 CSV로 저장됩니다.
+전처리 서버가 후보지 주소와 공간정보를 구성한 뒤 Vision AI 서버에 항공영상과 필지 정보를 전달합니다. 최종 정제본은 ML Feature에 Vision 면적·이격거리·형태·패널 배치 결과와 실행 정보를 결합한 **319개 후보지, 54개 컬럼**으로 구성됩니다.
 
 ## 1. 시스템 구성
 
@@ -29,10 +29,11 @@ Preprocessing API :8001
                     ├─ YOLO Segmentation
                     ├─ 도로·건물 이격거리
                     ├─ 형태 점수·가용면적
-                    └─ 유효 패널 수
+                    ├─ 유효 패널 수
+                    └─ 패널별 배치 좌표
                     │
                     ▼
-       Vision Feature 및 결합 CSV 저장
+       ML + Vision 최종 입력 데이터 저장
 ```
 
 Vision 연동을 사용하지 않을 경우 `VISION_ENABLED=false`로 설정하면 34개 ML 전처리만 실행할 수 있습니다.
@@ -131,46 +132,51 @@ Data_Preprocessing/
 3. 이미지 범위에 대응하는 EPSG:3857 `extent3857`을 계산합니다.
 4. 이미지, `extent3857`, `candidate_id`를 Vision `/predict`에 전달합니다.
 5. Vision 서버가 동일한 GPKG에서 `candidate_id`에 맞는 필지를 선택합니다.
-6. YOLO 결과와 필지 경계를 이용해 이격거리·형태·패널 수를 계산합니다.
-7. 결과를 `Vision_Features.csv`와 결합 CSV에 저장합니다.
+6. YOLO 결과와 필지 경계를 이용해 이격거리·형태·설치 가능 면적을 계산합니다.
+7. 필지 내부에 패널을 배치하고 도로·건물 이격조건을 통과한 유효 패널 수를 계산합니다.
+8. 필지 형상과 패널별 배치 위치를 GeoJSON으로 변환합니다.
+9. ML Feature, Vision 결과, 실행 상태 및 GeoJSON 결과를 최종 입력 데이터로 결합합니다.
 
-## 5. 생성 Feature
+## 5. 최종 입력 데이터
 
-### ML용 34개 컬럼
+현재 최종 정제본 `전처리_완료_입력_데이터.csv`는 **319개 후보지, 54개 컬럼**으로 구성됩니다.
 
-| 분류 | 컬럼 |
-|---|---|
-| 식별·지역 | `source_id_ml`, `address_ml`, `longitude`, `latitude`, `시도`, `시군구`, `region_group` |
-| 후보지 정보 | `자산구분_ML`, `설치구분`, `label`, `asset_type_code` |
-| 일사·발전 | `ghi_avg_daily`, `pvout_avg_daily`, `dni_avg_daily`, `dif_avg_daily`, `gti_avg_daily`, `temp_avg` |
-| 풍속 | `wind_speed_10m`, `wind_speed_50m`, `wind_speed_100m` |
-| 지형 | `slope_avg`, `slope_dir`, `elevation_avg`, `Hillshade`, `Southness` |
-| 전력망 | `distance_to_substation_km`, `distance_to_powerline_km`, `substation_count_5km`, `powerline_length_5km_km`, `high_voltage_line_nearby_5km`, 최대전압 및 결측 플래그 |
+전체 컬럼은 **ML 입력 34개 + Vision 분석 결과 14개 + Vision 실행 상태 3개 + 재계산 여부 1개 + 필지·패널 배치 JSON 2개**로 구성됩니다.
+
+### 컬럼 구성
+
+| 구분 | 주요 컬럼 | 설명 |
+|---|---|---|
+| 후보지 식별 | `source_id_ml`, `candidate_id`, `pnu` | 후보지 ID, Vision AI 매칭 ID, 필지고유번호 |
+| 위치 정보 | `address_ml`, `longitude`, `latitude`, `시도`, `시군구`, `region_group` | 주소, 경위도 및 지역 구분 |
+| 후보 속성 | `자산구분_ML`, `설치구분`, `label`, `asset_type_code` | 토지·건물 구분, 설치 여부 및 ML 라벨 |
+| 태양광 자원 | `ghi_avg_daily`, `pvout_avg_daily`, `dni_avg_daily`, `dif_avg_daily`, `gti_avg_daily` | 후보지 위치의 일평균 태양광 자원 피처 |
+| 기상 정보 | `temp_avg`, `wind_speed_10m`, `wind_speed_50m`, `wind_speed_100m` | 평균기온과 높이별 풍속 |
+| 지형 정보 | `slope_avg`, `slope_dir`, `elevation_avg`, `Hillshade`, `Southness` | 평균 경사도·방향, 고도, 음영 및 남향성 |
+| 전력 인프라 | `distance_to_substation_km`, `distance_to_powerline_km` | 가장 가까운 변전소 및 전력선까지의 거리 |
+| 전력망 분포 | `substation_count_5km`, `powerline_length_5km_km`, `high_voltage_line_nearby_5km` | 후보지 반경 5km 내 변전소 수, 전력선 길이 및 고압선 존재 여부 |
+| 전압 정보 | `substation_max_voltage_kv`, `powerline_max_voltage_kv` | 주변 변전소 및 전력선의 최대 전압 |
+| 결측 표시 | `substation_max_voltage_kv_missing`, `powerline_max_voltage_kv_missing` | 최대 전압 정보의 결측 여부 |
+| Vision 면적 | `pixel_area`, `real_area`, `usable_area` | 영상 내 필지 픽셀 면적, 실제 필지 면적 및 형태 효율을 반영한 설치 가능 면적 |
+| Vision 이격거리 | `distance_to_road_px`, `distance_to_building_px`, `distance_to_road_m`, `distance_to_building_m` | 도로 및 건물과의 픽셀·미터 단위 이격거리 |
+| 형태 분석 | `shape_score`, `shape_grade`, `shape_efficiency`, `recommended_layout` | 후보지 형태 점수·등급·효율 및 권장 패널 배치 방향 |
+| 설치 규모 | `estimated_panel_count` | 필지 경계와 배치 조건을 통과한 예상 설치 가능 패널 수 |
+| Vision 실행 상태 | `vision_status`, `vision_error`, `vision_model_version` | Vision AI 처리 결과, 오류 내용 및 사용 모델 버전 |
+| 재계산 여부 | `recomputed` | 최종 보정 과정에서 Vision 결과를 다시 계산했는지 여부 |
+| 필지 형상 | `parcel_geometry_json` | 분석에 사용한 필지 경계를 GeoJSON Polygon으로 저장한 값 |
+| 패널 배치 | `panel_layout_json` | 필지 내부에 배치한 개별 패널의 위치와 유효 여부를 GeoJSON FeatureCollection으로 저장한 값 |
+
+`usable_area`는 `real_area × shape_efficiency`로 계산한 형태 효율 반영 면적입니다.
+
+`estimated_panel_count`는 배치 시뮬레이션에서 유효 판정을 받은 패널의 개수입니다. 실제 패널별 배치 좌표와 유효 여부는 `panel_layout_json`에서 확인할 수 있습니다.
+
+`parcel_geometry_json`과 `panel_layout_json`은 경위도 좌표계의 GeoJSON 형식입니다. `panel_layout_json`의 각 Feature에는 패널 ID와 `valid` 판정이 포함되므로 지도에서 필지 경계와 패널 배치 결과를 함께 시각화할 수 있습니다.
+
+도로 또는 건물이 영상에서 검출되지 않은 후보지는 해당 이격거리 값이 비어 있을 수 있습니다. 이 경우 처리 성공 여부와 오류 내용은 `vision_status`, `vision_error`에서 확인합니다.
 
 `substation_max_voltage_kv` 또는 `powerline_max_voltage_kv`는 OSM 원본에 전압 태그가 없으면 비어 있을 수 있습니다. 이 경우 대응하는 `*_missing` 컬럼이 `1`이면 정상적인 관측 불가 값으로 처리합니다.
 
-정확한 컬럼 순서는 `GET /schema` 또는 `preprocessing/FINAL_DATASET_GUIDE.md`에서 확인할 수 있습니다.
-
-### Vision 결과 14개 컬럼
-
-```text
-pixel_area
-real_area
-distance_to_road_px
-distance_to_building_px
-distance_to_road_m
-distance_to_building_m
-shape_score
-shape_grade
-shape_efficiency
-recommended_layout
-usable_area
-estimated_panel_count
-candidate_id
-pnu
-```
-
-`estimated_panel_count`는 단순 면적 나눗셈이 아니라 필지 경계, 패널 간격, 가장자리 여백, 도로·건물 이격조건을 통과한 패널의 개수입니다.
+ML용 34개 컬럼의 정확한 순서는 `GET /schema` 또는 `preprocessing/FINAL_DATASET_GUIDE.md`에서 확인할 수 있습니다.
 
 ## 6. 입력 데이터와 외부 자원
 
@@ -238,96 +244,7 @@ CANDIDATE_GPKG_PATH=C:\절대경로\preprocessing\data\result\Preprocessed_Parce
 
 `CANDIDATE_GPKG_PATH`는 전처리 서버가 생성하는 최신 `Preprocessed_Parcels.gpkg`를 가리켜야 합니다.
 
-## 8. 실행 방법
-
-### 8.1 전처리 서버 설치
-
-```powershell
-cd preprocessing
-python -m venv .venv
-.venv\Scripts\activate
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-### 8.2 Vision 코드 적용
-
-이 저장소의 `vision/api/`는 기존 [visionAI 저장소](https://github.com/AIVLE-big-project-19/visionAI)의 연동 코드를 교체하기 위한 파일입니다.
-
-```text
-vision/api/config.py
-vision/api/main.py
-vision/api/inference.py
-vision/api/gpkg_candidates.py
-```
-
-Vision AI 프로젝트에 위 파일을 적용하고 해당 프로젝트의 환경에서 YOLO 모델과 의존성을 준비합니다.
-
-### 8.3 서버 실행 순서
-
-Vision 서버를 먼저 실행합니다.
-
-```powershell
-python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
-```
-
-그다음 전처리 서버를 실행합니다.
-
-```powershell
-cd preprocessing
-.venv\Scripts\activate
-python -m uvicorn api.main:app --host 0.0.0.0 --port 8001
-```
-
-- 전처리 Swagger: `http://127.0.0.1:8001/docs`
-- Vision Swagger: `http://127.0.0.1:8000/docs`
-
-## 9. API
-
-### 전처리 API
-
-| Method | Endpoint | 설명 |
-|---|---|---|
-| GET | `/health` | 서버 상태와 초기화 경고 확인 |
-| GET | `/sources` | API 키·래스터·전력망·Vision 설정 상태 확인 |
-| GET | `/schema` | 최종 34개 ML 컬럼과 조건부 결측 컬럼 확인 |
-| POST | `/preprocess` | 주소 한 건 또는 여러 건 전처리 |
-| POST | `/preprocess/file` | 주소 컬럼이 있는 CSV·XLSX 업로드 전처리 |
-
-### 주소 한 건
-
-```json
-{
-  "address": "충청남도 태안군 안면읍 승언리 646-18",
-  "save": true
-}
-```
-
-### 여러 주소
-
-```json
-{
-  "addresses": [
-    "충청남도 태안군 안면읍 승언리 646-18",
-    "대전광역시 서구 장안동 513-10"
-  ],
-  "save": true
-}
-```
-
-`address`와 `addresses`는 동시에 사용할 수 없습니다.
-
-### 파일 업로드
-
-```powershell
-curl -X POST "http://127.0.0.1:8001/preprocess/file" `
-  -F "file=@data/input/Merged_Test_Data.csv" `
-  -F "save=true"
-```
-
-파일에서는 `address`, `address_ml`, `주소`, `소재지`, `도로명주소`, `지번주소` 등의 주소 컬럼을 인식합니다.
-
-## 10. 출력 파일
+## 8. 출력 파일
 
 | 파일 | 내용 |
 |---|---|
@@ -338,28 +255,7 @@ curl -X POST "http://127.0.0.1:8001/preprocess/file" `
 | `data/result/Preprocessed_Parcels.gpkg` | Vision 서버가 `candidate_id`로 조회하는 필지 GPKG |
 | `data/result/Vision_Features.csv` | 후보별 Vision 결과 누적 |
 | `data/result/Latest_Merged_Rows_With_Vision.csv` | 이번 ML 전처리 행과 Vision Feature 결합 결과 |
-
-`save=false`이면 파일을 저장하지 않고 API 응답으로만 결과를 확인합니다.
-
-## 11. 처리 상태와 오류 확인
-
-- `SUCCESS`: 주요 단계가 모두 정상 처리됨
-- `PARTIAL_SUCCESS`: 일부 외부 조회 또는 원천 파일이 누락됨
-- `FAILED`: 지오코딩 등 필수 단계 실패
-
-최종 34개 ML 컬럼에는 상태 컬럼을 포함하지 않습니다. 다음 위치에서 처리 상태를 확인합니다.
-
-- API 응답의 `summary`
-- API 응답의 `result_files`
-- `Preprocessing_Audit.csv`
-- `GET /sources`
-
-`REQUIRE_COMPLETE_MERGED_ROWS=true`이면 조건부 결측을 제외한 필수 값이 하나라도 없을 때 최종 저장을 중단합니다. 기본 코드 설정은 `false`입니다.
-
-## 12. 연계 저장소
-
-- [Vision AI](https://github.com/AIVLE-big-project-19/visionAI): 항공영상 Segmentation 및 패널 배치 분석
-- [Ranking ML](https://github.com/AIVLE-big-project-19/Ranking_ML): 전처리·Vision 결과 기반 후보지 점수·등급·순위 산출
+| `전처리_완료_입력_데이터.csv` | ML Feature, Vision 결과, 필지 형상 및 패널 배치 정보를 결합한 최종 54개 컬럼 데이터 |
 
 ## 13. 주의사항
 
